@@ -4,19 +4,29 @@ import path from 'path';
 import fs from 'fs';
 import { defineConfig } from 'vite';
 
-// Automatically duplicate dist/index.html to dist/404.html for GitHub Pages single-page-app routing
+// Automatically duplicate dist/index.html to dist/404.html and sync to docs/ folder for GitHub Pages
 function githubPagesSpa() {
   return {
     name: 'github-pages-spa',
     closeBundle() {
       try {
-        const distIndex = path.resolve(__dirname, 'dist', 'index.html');
-        const dist404 = path.resolve(__dirname, 'dist', '404.html');
+        const distDir = path.resolve(__dirname, 'dist');
+        const distIndex = path.resolve(distDir, 'index.html');
+        const dist404 = path.resolve(distDir, '404.html');
         if (fs.existsSync(distIndex)) {
           fs.copyFileSync(distIndex, dist404);
         }
+
+        // Also copy dist to docs/ so users can deploy via "Deploy from a branch -> /docs" option
+        const docsDir = path.resolve(__dirname, 'docs');
+        if (fs.existsSync(distDir)) {
+          if (fs.existsSync(docsDir)) {
+            fs.rmSync(docsDir, { recursive: true, force: true });
+          }
+          fs.cpSync(distDir, docsDir, { recursive: true });
+        }
       } catch (e) {
-        console.warn('Note: Could not copy 404.html:', e);
+        console.warn('Note: Could not copy 404.html or docs folder:', e);
       }
     },
   };
