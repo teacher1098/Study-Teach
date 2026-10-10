@@ -1,0 +1,10 @@
+{
+  "name": "RC Live AI Study \u0026 Teaching Companion",
+  "description": "Minimalist, real-time multimodal study companion powered by Gemini Live voice, interactive mindmaps, calculation simulators, and instant quizzes.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
