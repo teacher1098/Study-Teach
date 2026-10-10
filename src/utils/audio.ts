@@ -15,16 +15,26 @@ export class AudioStreamPlayer {
   }
 
   private initContext() {
-    if (!this.audioCtx) {
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioCtx = new AudioCtxClass({ sampleRate: 24000 });
-      this.analyser = this.audioCtx.createAnalyser();
-      this.analyser.fftSize = 64;
-      this.analyser.smoothingTimeConstant = 0.8;
-      this.analyser.connect(this.audioCtx.destination);
-    }
-    if (this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume();
+    try {
+      if (!this.audioCtx && typeof window !== 'undefined') {
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtxClass) {
+          try {
+            this.audioCtx = new AudioCtxClass({ sampleRate: 24000 });
+          } catch {
+            this.audioCtx = new AudioCtxClass();
+          }
+          this.analyser = this.audioCtx.createAnalyser();
+          this.analyser.fftSize = 64;
+          this.analyser.smoothingTimeConstant = 0.8;
+          this.analyser.connect(this.audioCtx.destination);
+        }
+      }
+      if (this.audioCtx && this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume().catch(() => {});
+      }
+    } catch (e) {
+      console.warn('AudioContext init note:', e);
     }
   }
 
