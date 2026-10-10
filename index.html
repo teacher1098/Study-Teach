@@ -12,10 +12,40 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" crossorigin href="/Study-Teach/assets/index-ZBhofywp.css" id="app-style">
+    <script>
+      (function() {
+        if (!window.location.pathname.startsWith('/Study-Teach/')) {
+          var link = document.getElementById('app-style');
+          if (link) link.href = './assets/index-ZBhofywp.css';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+
+    <script type="module">
+      // Dual-environment loader:
+      // If deployed on GitHub Pages or static host (where Node/Vite is not running):
+      // Load the pre-compiled production bundle!
+      // If running in development (AI Studio preview / Vite dev server):
+      // Load the TypeScript source entry point with HMR!
+      const isStaticOrGitHub = window.location.hostname.endsWith('github.io') || window.location.protocol === 'file:';
+
+      if (isStaticOrGitHub) {
+        const bundlePath = window.location.pathname.startsWith('/Study-Teach/')
+          ? '/Study-Teach/assets/index-DU9G_jHA.js'
+          : './assets/index-DU9G_jHA.js';
+
+        import(bundlePath).catch(function(err) {
+          console.warn('Retrying with relative bundle import...', err);
+          import('./assets/index-DU9G_jHA.js');
+        });
+      } else {
+        import('/src/main.tsx');
+      }
+    </script>
   </body>
 </html>
 

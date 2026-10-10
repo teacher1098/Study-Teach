@@ -24,6 +24,16 @@ function githubPagesSpa() {
             fs.rmSync(docsDir, { recursive: true, force: true });
           }
           fs.cpSync(distDir, docsDir, { recursive: true });
+
+          // Also sync assets to root assets folder so branch /(root) deployment works directly
+          const rootAssetsDir = path.resolve(__dirname, 'assets');
+          const distAssetsDir = path.resolve(distDir, 'assets');
+          if (fs.existsSync(distAssetsDir)) {
+            if (fs.existsSync(rootAssetsDir)) {
+              fs.rmSync(rootAssetsDir, { recursive: true, force: true });
+            }
+            fs.cpSync(distAssetsDir, rootAssetsDir, { recursive: true });
+          }
         }
       } catch (e) {
         console.warn('Note: Could not copy 404.html or docs folder:', e);
