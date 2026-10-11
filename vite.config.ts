@@ -29,6 +29,15 @@ function githubPagesSpa() {
           const rootAssetsDir = path.resolve(__dirname, 'assets');
           const distAssetsDir = path.resolve(distDir, 'assets');
           if (fs.existsSync(distAssetsDir)) {
+            const files = fs.readdirSync(distAssetsDir);
+            const cssFile = files.find((f) => f.endsWith('.css'));
+            if (cssFile) {
+              try {
+                fs.copyFileSync(path.resolve(distAssetsDir, cssFile), path.resolve(distAssetsDir, 'style.css'));
+                fs.copyFileSync(path.resolve(distAssetsDir, cssFile), path.resolve(distAssetsDir, 'index.css'));
+              } catch (_) {}
+            }
+
             if (fs.existsSync(rootAssetsDir)) {
               fs.rmSync(rootAssetsDir, { recursive: true, force: true });
             }
