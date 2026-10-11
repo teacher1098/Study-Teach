@@ -27,6 +27,13 @@ import type {
   ConnectionState,
 } from './types';
 import { AudioStreamPlayer, AudioRecorder } from './utils/audio';
+import { BrowserSpeechRecognizer, BrowserSpeechSynthesizer } from './utils/speech';
+import {
+  generateSocraticResponse,
+  generateMindmapArtifact,
+  generateSimulatorArtifact,
+  generateQuizArtifact,
+} from './utils/socraticEngine';
 import { DocumentViewer } from './components/DocumentViewer';
 import { RightPanel } from './components/RightPanel';
 import { LoginScreen, SessionData } from './components/LoginScreen';
@@ -69,44 +76,72 @@ export default function App() {
   // Audio utility instances
   const audioPlayerRef = useRef<AudioStreamPlayer | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
+  const browserSpeechRecRef = useRef<BrowserSpeechRecognizer | null>(null);
+  const browserSpeechSynthRef = useRef<BrowserSpeechSynthesizer | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Analysers for canvas visualizer
   const [micAnalyser, setMicAnalyser] = useState<AnalyserNode | null>(null);
   const [outputAnalyser, setOutputAnalyser] = useState<AnalyserNode | null>(null);
 
-  // Initialize audio player
+  // Initialize audio players & synthesizers
   useEffect(() => {
     audioPlayerRef.current = new AudioStreamPlayer();
     setOutputAnalyser(audioPlayerRef.current.getAnalyser());
 
     audioRecorderRef.current = new AudioRecorder();
+    browserSpeechRecRef.current = new BrowserSpeechRecognizer();
+    browserSpeechSynthRef.current = new BrowserSpeechSynthesizer();
 
     return () => {
       audioPlayerRef.current?.close();
       audioRecorderRef.current?.stop();
+      browserSpeechRecRef.current?.stop();
+      browserSpeechSynthRef.current?.stop();
       wsRef.current?.close();
     };
   }, []);
 
-  // Check if AI is currently playing audio
+  // Check if AI is currently playing audio (via PCM stream or SpeechSynthesis)
   useEffect(() => {
     const interval = setInterval(() => {
-      if (audioPlayerRef.current) {
-        const isPlaying = audioPlayerRef.current.isPlaying();
-        setIsAiSpeaking(isPlaying);
-        if (isPlaying) {
-          setConnectionState('speaking');
-        } else if (isMicActive) {
-          setConnectionState('listening');
-        } else if (wsRef.current?.readyState === WebSocket.OPEN) {
-          setConnectionState('connected');
-        }
+      const isPlaying =
+        (audioPlayerRef.current ? audioPlayerRef.current.isPlaying() : false) ||
+        (browserSpeechSynthRef.current ? browserSpeechSynthRef.current.getSpeakingState() : false);
+
+      setIsAiSpeaking(isPlaying);
+      if (isPlaying) {
+        setConnectionState('speaking');
+      } else if (isMicActive) {
+        setConnectionState('listening');
+      } else if (wsRef.current?.readyState === WebSocket.OPEN) {
+        setConnectionState('connected');
       }
     }, 150);
 
     return () => clearInterval(interval);
   }, [isMicActive]);
+
+  // Helper to vocalize AI response out loud with SpeechSynthesis
+  const speakAIResponse = useCallback(
+    (text: string) => {
+      setIsAiSpeaking(true);
+      setConnectionState('speaking');
+      browserSpeechSynthRef.current?.speak(
+        text,
+        selectedVoice,
+        () => {
+          setIsAiSpeaking(true);
+          setConnectionState('speaking');
+        },
+        () => {
+          setIsAiSpeaking(false);
+          setConnectionState(isMicActive ? 'listening' : 'connected');
+        }
+      );
+    },
+    [isMicActive, selectedVoice]
+  );
 
   // Connect to backend WebSocket
   const connectWebSocket = useCallback((docTitle: string, docExcerpt: string, voice: string) => {
@@ -314,7 +349,10 @@ export default function App() {
         textContent: newDoc.rawText.slice(0, 8000),
       }),
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('API unavailable on static host');
+        return res.json();
+      })
       .then((data) => {
         if (data.initialMindmap) {
           setMindmaps([
@@ -347,26 +385,45 @@ export default function App() {
             id: `note-kc-${Date.now()}-${i}`,
             headline: `Concept ${i + 1}: ${kc}`,
             noteType: 'insight',
-            content: `Core pillar of ${newDoc.title}. Socratic inquiry available via Gemini Live.`,
+            content: `Core pillar of ${newDoc.title}. Socratic inquiry available via voice or chat.`,
             pageNumber: 1,
             createdAt: new Date().toISOString(),
           }));
           setSocraticNotes(notes);
         }
       })
-      .catch((err) => {
-        console.warn('Initial doc analysis background notice:', err);
+      .catch(() => {
+        // Instant Client-Side Study Guide for Static Hosting (GitHub Pages)
+        const initialMindmap = generateMindmapArtifact(newDoc.title, newDoc.rawText);
+        setMindmaps([initialMindmap]);
+        const initialQuiz = generateQuizArtifact(newDoc.title, newDoc.rawText, 'easy');
+        setQuizzes([initialQuiz]);
+        setSocraticNotes([
+          {
+            id: `note-init-1`,
+            headline: `Foundational Thesis: ${newDoc.title}`,
+            noteType: 'insight',
+            content: `Document loaded with ${newDoc.pages.length} pages. Turn on your microphone or use the chat to ask questions, explore interactive simulations, or request conceptual breakdowns.`,
+            pageNumber: 1,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
       });
   };
 
-  // Toggle Microphone
+  // Toggle Microphone (Supports both Gemini Live WebSocket and Browser Speech Recognition)
   const handleToggleMic = async () => {
     if (isMicActive) {
       audioRecorderRef.current?.stop();
+      browserSpeechRecRef.current?.stop();
+      browserSpeechSynthRef.current?.stop();
       setIsMicActive(false);
       setConnectionState(wsRef.current?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected');
     } else {
-      // If no document uploaded yet, connect with default study context
+      setIsMicActive(true);
+      setConnectionState('listening');
+
+      // 1. Attempt WebSocket connection if dev server is running
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         connectWebSocket(
           currentDocument?.title || 'General Academic Companion',
@@ -375,7 +432,8 @@ export default function App() {
         );
       }
 
-      const started = await audioRecorderRef.current?.start((base64Pcm: string) => {
+      // 2. Start microphone PCM stream for live visualizer
+      await audioRecorderRef.current?.start((base64Pcm: string) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           wsRef.current.send(
             JSON.stringify({
@@ -385,22 +443,74 @@ export default function App() {
           );
         }
       });
+      setMicAnalyser(audioRecorderRef.current?.getAnalyser() || null);
 
-      if (started) {
-        setIsMicActive(true);
-        setMicAnalyser(audioRecorderRef.current?.getAnalyser() || null);
-        setConnectionState('listening');
-      }
+      // 3. Start Browser Speech Recognition (zero-latency speech-to-text fallback for GitHub Pages)
+      browserSpeechRecRef.current?.start(
+        (recognizedText: string, isFinal: boolean) => {
+          if (isFinal && recognizedText.trim()) {
+            // If WebSocket is not connected (e.g. GitHub Pages), process locally!
+            if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+              const userMsg: TranscriptMessage = {
+                id: `usr-${Date.now()}`,
+                role: 'user',
+                text: recognizedText,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              };
+              setTranscript((prev) => [...prev, userMsg]);
+
+              // Process query with Socratic Reasoning Engine
+              const socratic = generateSocraticResponse(
+                recognizedText,
+                currentDocument?.title || 'Study Material',
+                currentDocument?.rawText || '',
+                currentPage
+              );
+
+              const modelMsg: TranscriptMessage = {
+                id: `rep-${Date.now()}`,
+                role: 'model',
+                text: socratic.displayReply,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              };
+              setTranscript((prev) => [...prev, modelMsg]);
+
+              if (socratic.mindmap) {
+                setMindmaps((prev) => [socratic.mindmap!, ...prev]);
+              }
+              if (socratic.simulator) {
+                setSimulators((prev) => [socratic.simulator!, ...prev]);
+              }
+              if (socratic.quiz) {
+                setQuizzes((prev) => [socratic.quiz!, ...prev]);
+              }
+              if (socratic.note) {
+                setSocraticNotes((prev) => [socratic.note!, ...prev]);
+              }
+
+              // Speak the AI answer out loud to the student!
+              speakAIResponse(socratic.spokenReply);
+            }
+          }
+        },
+        () => {
+          if (isMicActive) {
+            // Keep active if mic toggle is still turned on
+          }
+        }
+      );
     }
   };
 
   // Interrupt AI Spoken Response
   const handleInterrupt = () => {
     audioPlayerRef.current?.interrupt();
+    browserSpeechSynthRef.current?.stop();
     setIsAiSpeaking(false);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'interrupted' }));
     }
+    setConnectionState(isMicActive ? 'listening' : 'connected');
   };
 
   // Voice Persona change
@@ -418,7 +528,7 @@ export default function App() {
     }
   };
 
-  // Send Text Input fallback to WebSocket / Chat
+  // Send Text Input with full Socratic + Speech fallback
   const handleSendText = (text: string) => {
     const userMsg: TranscriptMessage = {
       id: `usr-${Date.now()}`,
@@ -432,7 +542,7 @@ export default function App() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'text', text }));
     } else {
-      // Fallback to REST chat endpoint
+      // Fallback to REST chat endpoint or Client-Side Socratic Engine
       fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -443,7 +553,10 @@ export default function App() {
           currentPage,
         }),
       })
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) throw new Error('REST API unavailable');
+          return res.json();
+        })
         .then((data) => {
           if (data.reply) {
             setTranscript((prev) => [
@@ -455,9 +568,41 @@ export default function App() {
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               },
             ]);
+            speakAIResponse(data.reply);
           }
         })
-        .catch(console.error);
+        .catch(() => {
+          // Client-Side Socratic Engine Response
+          const socratic = generateSocraticResponse(
+            text,
+            currentDocument?.title || 'Study Material',
+            currentDocument?.rawText || '',
+            currentPage
+          );
+
+          setTranscript((prev) => [
+            ...prev,
+            {
+              id: `rep-${Date.now()}`,
+              role: 'model',
+              text: socratic.displayReply,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            },
+          ]);
+
+          if (socratic.mindmap) {
+            setMindmaps((prev) => [socratic.mindmap!, ...prev]);
+          }
+          if (socratic.simulator) {
+            setSimulators((prev) => [socratic.simulator!, ...prev]);
+          }
+          if (socratic.quiz) {
+            setQuizzes((prev) => [socratic.quiz!, ...prev]);
+          }
+
+          // Speak reply out loud
+          speakAIResponse(socratic.spokenReply);
+        });
     }
   };
 
@@ -476,7 +621,10 @@ export default function App() {
         context,
       }),
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('API unavailable');
+        return res.json();
+      })
       .then((data) => {
         if (data.mermaidSyntax) {
           const newMap: MindmapData = {
@@ -489,7 +637,11 @@ export default function App() {
           setMindmaps((prev) => [newMap, ...prev]);
         }
       })
-      .catch(console.error);
+      .catch(() => {
+        // Client-side fallback diagram
+        const localMap = generateMindmapArtifact(topic, context);
+        setMindmaps((prev) => [localMap, ...prev]);
+      });
   };
 
   // Quick Action: Request Simulator for active page
@@ -507,7 +659,10 @@ export default function App() {
         context,
       }),
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('API unavailable');
+        return res.json();
+      })
       .then((data) => {
         if (data.variables && data.computeExpression) {
           const newSim: SimulatorData = {
@@ -525,7 +680,11 @@ export default function App() {
           setSimulators((prev) => [newSim, ...prev]);
         }
       })
-      .catch(console.error);
+      .catch(() => {
+        // Client-side fallback simulator
+        const localSim = generateSimulatorArtifact(topic, context);
+        setSimulators((prev) => [localSim, ...prev]);
+      });
   };
 
   // Quick Action: Request Quiz for active page
@@ -546,7 +705,10 @@ export default function App() {
         tier: chosenTier,
       }),
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('API unavailable');
+        return res.json();
+      })
       .then((data) => {
         if (data.question && data.options) {
           const newQuiz: QuizCardData = {
@@ -562,7 +724,11 @@ export default function App() {
           setQuizzes((prev) => [newQuiz, ...prev]);
         }
       })
-      .catch(console.error);
+      .catch(() => {
+        // Client-side fallback quiz
+        const localQuiz = generateQuizArtifact(topic, context, chosenTier);
+        setQuizzes((prev) => [localQuiz, ...prev]);
+      });
   };
 
   // Handle Logout
